@@ -190,7 +190,7 @@ class Jimterm:
 
     def quote_raw(self, data):
         if self.quote_re is None:
-            matcher = '[^%s]' % re.escape(string.printable)
+            matcher = '[^%s]' % re.escape(string.printable + "\b")
             if sys.version_info < (3,):
                 self.quote_re = re.compile(matcher)
                 qf = lambda x: ("\\x%02x" % ord(x.group(0)))
