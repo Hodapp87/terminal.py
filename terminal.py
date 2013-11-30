@@ -89,12 +89,12 @@ elif os.name == 'posix':
                     return os.read(self.fd, size)
                 except OSError as e:
                     if e.errno == errno.EAGAIN:
-                        return ''
+                        return None
                     raise
             elif x:
                 raise SerialException("exception (device disconnected?)")
             else:
-                return ''
+                return None # timeout
 
 else:
     raise ("Sorry, no terminal implementation for your platform (%s) "
@@ -210,8 +210,10 @@ class Jimterm:
                 null = b'\x00'
             while self.alive:
                 data = serial.nonblocking_read(self.bufsize)
-                if not data or not len(data):
+                if data is None:
                     continue
+                if not len(data):
+                    raise Exception("read returned EOF")
 
                 # don't print a NULL if it's the first character we
                 # read.  This hides startup/port-opening glitches with
