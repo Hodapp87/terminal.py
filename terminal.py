@@ -132,6 +132,7 @@ class Jimterm:
                  add_cr = False,
                  raw = True,
                  color = True,
+                 logfile = None,
                  bufsize = 65536):
 
         self.color = JimtermColor()
@@ -142,11 +143,24 @@ class Jimterm:
         self.suppress_write_bytes = suppress_write_bytes
         self.suppress_read_firstnull = suppress_read_firstnull
         self.last_color = ""
+        # The last index for which we were outputting (kept around to
+        # track when we should make a note of it changing, as with
+        # self.last_color):
+        self.last_index = None
         self.threads = []
         self.transmit_all = transmit_all
         self.add_cr = add_cr
         self.raw = raw
         self.bufsize = bufsize
+        # self.logfile & self.log_write are either None and a do-nothing
+        # function, or they are the open log file and a function which
+        # writes data to the log:
+        if logfile:
+            self.logfile = open(logfile, "w")
+            self.log_write = lambda s: self.logfile.write(s)
+        else:
+            self.logfile = None
+            self.log_write = lambda _: None
         self.quote_re = None
 
     def print_header(self, nodes, bauds, output = sys.stdout):
@@ -154,10 +168,12 @@ class Jimterm:
             output.write(self.color.code(n)
                          + node + ", " + str(baud) + " baud"
                          + self.color.reset + "\n")
+            self.log_write("[%u] = %s, %s baud\n" % (n, node, baud))
         if sys.stdin.isatty():
             output.write("^C to exit\n")
             output.write("----------\n")
         output.flush()
+        self.log_write("----------\n")
 
     def start(self):
         self.alive = True
@@ -169,7 +185,7 @@ class Jimterm:
         for (n, serial) in enumerate(self.serials):
             self.threads.append(threading.Thread(
                 target = self.reader,
-                args = (serial, self.color.code(n))
+                args = (serial, self.color.code(n), n)
                 ))
 
         # console->serial
@@ -200,8 +216,10 @@ class Jimterm:
             self.quote_func = qf
         return self.quote_re.sub(self.quote_func, data)
 
-    def reader(self, serial, color):
-        """loop and copy serial->console"""
+    def reader(self, serial, color, index):
+        """Loop and copy serial->console.  'serial' is the serial device,
+        'color' is the string for the current color, 'index' is the current
+        device index corresponding to 'serial'."""
         first = True
         try:
             if (sys.version_info < (3,)):
@@ -225,7 +243,11 @@ class Jimterm:
 
                 if color != self.last_color:
                     self.last_color = color
-                    os.write(sys.stdout.fileno(), color)
+                    os.write(sys.stdout.fileno(), color.encode("utf-8"))
+
+                if index != self.last_index:
+                    self.last_index = index
+                    self.log_write("[%u] " % (index,))
 
                 if self.add_cr:
                     if sys.version_info < (3,):
@@ -237,6 +259,7 @@ class Jimterm:
                     data = self.quote_raw(data)
 
                 os.write(sys.stdout.fileno(), data)
+                self.log_write(data.decode("utf-8"))
         except Exception as e:
             self.console.cleanup()
             sys.stdout.write(color)
@@ -244,6 +267,9 @@ class Jimterm:
             traceback.print_exc()
             sys.stdout.write(self.color.reset)
             sys.stdout.flush()
+            self.log_write("\nKilled with exception: %s" % (e,))
+            if self.logfile:
+                self.logfile.close()
             os._exit(1)
 
     def writer(self):
@@ -287,6 +313,9 @@ class Jimterm:
             self.console.cleanup()
             sys.stdout.write(self.color.reset)
             sys.stdout.flush()
+            self.log_write("\nKilled with exception: %s" % (e,))
+            if self.logfile:
+                self.logfile.close()
             traceback.print_exc()
             os._exit(1)
 
@@ -319,7 +348,9 @@ class Jimterm:
         # Cleanup
         sys.stdout.write(self.color.reset + "\n")
         self.console.cleanup()
-
+        if self.logfile:
+            self.logfile.close()
+        
 if __name__ == "__main__":
     import argparse
     import re
@@ -362,6 +393,9 @@ if __name__ == "__main__":
                        default=argparse.SUPPRESS,
                        help="Quote unprintable characters "
                        "(default, if stdout is a tty)")
+    parser.add_argument("--log", "-l", type=str,
+                        help="File to log all output (not input) to",
+                        default=None)
 
     args = parser.parse_args()
 
@@ -396,6 +430,7 @@ if __name__ == "__main__":
                    add_cr = args.crlf,
                    raw = raw,
                    color = (os.name == "posix" and not args.mono),
+                   logfile = args.log,
                    bufsize = args.bufsize)
     if not args.quiet:
         term.print_header(nodes, bauds, sys.stderr)
